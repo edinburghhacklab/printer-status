@@ -4,9 +4,16 @@ import re
 from logging import Logger, getLogger
 from paho.mqtt.client import Client
 import json
+from enum import Enum
 
 status_regex = re.compile(r"done: ([0-9]*).+?mins: ([0-9]*)")
 
+
+class State(str, Enum):
+    Paused = "Paused"
+    Cancelled = "Cancelled"
+    Printing = "Printing"
+    Complete = "Complete"
 
 class Printer:
     printer: printcore
@@ -19,16 +26,17 @@ class Printer:
     baud: int
 
     # Status
-    connected = False
-    paused = False
-    file = "None"
-    cwd = "None"
+    connected: bool
+    state: State
+    file: str
+    cwd: str
+    percent_done: int
+    time_remaining_mins: int
 
     # Internal
     mode = 'n' # n = normal, f = file list
 
     logger: Logger
-    packet = Status()
     client: Client
 
     def __init__(self, config: dict[str, str | int], client: Client):
@@ -41,15 +49,34 @@ class Printer:
 
         self.logger = getLogger(self.name)
         self.client = client
-        self.publish(f"printers/{self.shortname}/state", "Complete", retain=True)
+
+        self.state = State.Complete
+        self.time_remaining_mins = 0
+        self.percent_done = 0
+        self.file = "None"
+        self.cwd = "None"
+
+        self.send_status_to_mqtt()
+
+    def send_status_to_mqtt(self):
+        # Show as idle when not connected
+        if not self.connected:
+            self.state = State.Complete
+
+        self.publish(f"printers/{self.shortname}/state", str(self.state), retain=True)
         self.publish(
             f"printers/{self.shortname}/percent_done",
-            0,
+            str(self.percent_done),
             retain=True,
         )
         self.publish(
             f"printers/{self.shortname}/time_remaining_mins",
-            0,
+            str(self.time_remaining_mins),
+            retain=True,
+        )
+        self.publish(
+            f"printers/{self.shortname}/file",
+            str(self.file),
             retain=True,
         )
 
@@ -81,7 +108,7 @@ class Printer:
     def handle_msg(self, line: str):
         line = line.rstrip("\n")
         self.logger.debug(f"M: {self.mode} RECV: {line}")
-        
+
         # Normal mode
         if self.mode == 'n':
             # Print Status echo: 'NORMAL MODE: Percent done: 32; print time remaining in mins: 8; Change in mins: -1'
@@ -89,94 +116,68 @@ class Printer:
                 stats: regex.Match[str] = status_regex.search(line)  # type: ignore
                 self.logger.debug(f"{stats.group(1)}, {stats.group(2)}")
 
-                self.publish(
-                    f"printers/{self.shortname}/state",
-                    "Printing",
-                    retain=True
-                )
-                self.publish(
-                    f"printers/{self.shortname}/percent_done",
-                    int(stats.group(1)),
-                    retain=True,
-                )
-                self.publish(
-                    f"printers/{self.shortname}/time_remaining_mins",
-                    int(stats.group(2)),
-                    retain=True,
-                )
+                self.state = State.Printing
+                self.percent_done = int(stats.group(1))
+                self.time_remaining_mins = int(stats.group(2))
+                self.send_status_to_mqtt()
 
             # File opened: /JACOB/0.4/Cali-Dragon-Tiny_PLA.gcode Size: 467996
             elif line[0:12] == "File opened:":
                 file_name = line[13:-1].split(" ")[0]
-                self.publish(
-                    f"printers/{self.shortname}/state", "Printing", retain=True
-                )
-                self.publish(
-                    f"printers/{self.shortname}/file", file_name, retain=True
-                )
+                self.state = State.Printing
                 self.file = file_name
                 self.cwd = '/'.join(file_name.split('/')[0:-2])
+                self.send_status_to_mqtt()
 
             # File Finished: 'Done printing file'
             elif line == "Done printing file":
-                self.publish(
-                    f"printers/{self.shortname}/state", "Complete", retain=True
-                )
-                # Get list of files
-                self.printer.send_now("M20 L")
-                self.publish(f"sound/g1/speak", f"Print finished on {self.name}")
+                self.state = State.Complete
+                self.percent_done = 100
+                self.time_remaining_mins = 0
+                # Don't clear file and CWD yet so we can try and ping the user on discord
+                self.on_complete()
+                self.send_status_to_mqtt()
 
             # Print manually paused: '//action:paused'
-            elif line == "//action:paused":
-                self.publish(
-                    f"printers/{self.shortname}/state", "Paused", retain=True
-                )
-
-            # Print paused automatically
-            elif line == "echo:busy: paused for user" and not self.paused:
-                self.paused = True
-
-                self.publish(
-                    f"printers/{self.shortname}/state", "Paused", retain=True
-                )
-                self.client.publish(f"sound/g1/speak", f"Print paused on {self.name}")
+            # Print paused automatically: 'echo:busy: paused for user'
+            elif line == "//action:paused" or line == "echo:busy: paused for user" and self.state != State.Paused:
+                self.state = State.Paused
+                self.send_status_to_mqtt()
+                self.on_complete()
 
             # Print cancelled
             elif line == "//action:cancel":
-                self.client.publish(
-                    f"printers/{self.shortname}/state", "Cancelled", retain=True
-                )
+                self.state = State.Cancelled
+                self.send_status_to_mqtt()
+                self.on_complete()
 
-            elif line[0:15] == "Begin file list":
+            elif line.startswith("Begin file list"):
                 self.mode = 'f'
             else:
                 self.logger.debug(f"Unknown Recv")
-        
+
         # File list mode
         elif self.mode == 'f':
             if line == "End file list":
                 self.mode = 'n'
-            elif line[0:len(self.cwd)] == self.cwd:
+            elif line.startswith(self.cwd) == self.cwd:
                 self.logger.debug(f"Matched dir: {line}")
                 _SD_path, _size, long_name = line.split(" ")
-                if long_name[1:18] == "config.discord...":
-                    username = long_name[18:-9]
+                if long_name.startswith("config.discord..."):
+                    username = long_name.removeprefix("config.discord...").removesuffix(".gcode")
 
                     self.publish("irc/send", json.dumps({
                         "to": "#edinhacklab-things",
                         "message": f"@{username} print '{self.file}' complete on {self.name}"
                     }))
 
-    def get_firmware_info(self):
-        self.logger.debug("SEND: M115 ; firmware info")
-        self.printer.send_now("M115")
-
-    def get_filename(self):
-        self.logger.debug("SEND: M27 C ; filename info")
-        self.printer.send_now("M27 C")
-
     def publish(self, topic: str, payload: str, retain=False):
         if not self.client.is_connected():
             self.client.connect("mqtt.hacklab")
-        
+
         self.client.publish(topic, payload, retain=retain)
+
+
+    def on_complete(self):
+        self.printer.send_now("M20 L")
+        self.publish(f"sound/g1/speak", f"Print finished on {self.name}")

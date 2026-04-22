@@ -12,3 +12,7 @@ dependencies = [
 
 [tool.uv.sources]
 printrun = { path = "lib/Printrun" }
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"

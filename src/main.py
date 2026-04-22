@@ -1,13 +1,14 @@
 import argparse
 import time
 import paho.mqtt.client as mqtt
+from paho.mqtt.enums import CallbackAPIVersion
 import json
 import logging
 from datetime import datetime
 
 from printers.printer import Printer
 
-client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
+client = mqtt.Client(callback_api_version=CallbackAPIVersion.VERSION2)
 client.connect("mqtt.hacklab")
 
 logger = logging.getLogger()
