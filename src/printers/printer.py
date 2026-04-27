@@ -4,16 +4,20 @@ import re
 from logging import Logger, getLogger
 from paho.mqtt.client import Client
 import json
-from enum import Enum
+from enum import StrEnum, Enum
 
 status_regex = re.compile(r"done: ([0-9]*).+?mins: ([0-9]*)")
 
 
-class State(str, Enum):
-    Paused = "Paused"
-    Cancelled = "Cancelled"
-    Printing = "Printing"
-    Complete = "Complete"
+class State(StrEnum):
+    Paused = "paused"
+    Cancelled = "cancelled"
+    Printing = "printing"
+    Complete = "complete"
+
+class ParseMode(Enum):
+    Normal = 1
+    File = 2
 
 class Printer:
     printer: printcore
@@ -29,12 +33,15 @@ class Printer:
     connected: bool
     state: State
     file: str
-    cwd: str
+    username: str | None
     percent_done: int
     time_remaining_mins: int
 
     # Internal
-    mode = 'n' # n = normal, f = file list
+    mode: ParseMode
+
+    in_username_dir: bool
+    dir_depth: int
 
     logger: Logger
     client: Client
@@ -49,12 +56,16 @@ class Printer:
 
         self.logger = getLogger(self.name)
         self.client = client
+        self.mode = ParseMode.Normal
 
+        self.connected = False
         self.state = State.Complete
         self.time_remaining_mins = 0
         self.percent_done = 0
         self.file = "None"
-        self.cwd = "None"
+        self.username = "None"
+        self.in_username_dir = False
+        self.dir_depth = 0
 
         self.send_status_to_mqtt()
 
@@ -110,7 +121,7 @@ class Printer:
         self.logger.debug(f"M: {self.mode} RECV: {line}")
 
         # Normal mode
-        if self.mode == 'n':
+        if self.mode == ParseMode.Normal:
             # Print Status echo: 'NORMAL MODE: Percent done: 32; print time remaining in mins: 8; Change in mins: -1'
             if line[0:11] == "NORMAL MODE":
                 stats: regex.Match[str] = status_regex.search(line)  # type: ignore
@@ -126,7 +137,7 @@ class Printer:
                 file_name = line[13:-1].split(" ")[0]
                 self.state = State.Printing
                 self.file = file_name
-                self.cwd = '/'.join(file_name.split('/')[0:-2])
+                self.username = file_name.split('/')[1] if len(file_name.split('/')) > 2 else None
                 self.send_status_to_mqtt()
 
             # File Finished: 'Done printing file'
@@ -152,18 +163,35 @@ class Printer:
                 self.on_complete()
 
             elif line.startswith("Begin file list"):
-                self.mode = 'f'
+                self.mode = ParseMode.File
+                self.in_username_dir = False
+                self.dir_depth = 0
             else:
                 self.logger.debug(f"Unknown Recv")
 
         # File list mode
-        elif self.mode == 'f':
+        elif self.mode == ParseMode.File:
             if line == "End file list":
-                self.mode = 'n'
-            elif line.startswith(self.cwd) == self.cwd:
-                self.logger.debug(f"Matched dir: {line}")
+                self.mode = ParseMode.Normal
+                self.in_username_dir = False
+                self.dir_depth = 0
+            elif line.startswith("DIR_ENTER"): # DIR_ENTER: /JACOB/ "jacob"
+                self.dir_depth += 1
+                if self.username is not None and self.username.lower() in line.lower():
+                    self.logger.debug("in username dir")
+                    self.in_username_dir = True
+            elif line.startswith("DIR_EXIT"):
+                self.dir_depth -= 1
+                if self.dir_depth <= 0:
+                    self.logger.debug("leaving username dir")
+                    self.in_username_dir = False
+                    self.dir_depth = 0
+            elif self.in_username_dir and "config.discord..." in line:
+                self.logger.debug(f"encountered identity file: {line}")
                 _SD_path, _size, long_name = line.split(" ")
+                long_name = long_name.removeprefix('"').removesuffix('"')
                 if long_name.startswith("config.discord..."):
+                    self.logger.debug(f"found discord filename: {long_name}")
                     username = long_name.removeprefix("config.discord...").removesuffix(".gcode")
 
                     self.publish("irc/send", json.dumps({
@@ -179,5 +207,7 @@ class Printer:
 
 
     def on_complete(self):
-        self.printer.send_now("M20 L")
         self.publish(f"sound/g1/speak", f"Print finished on {self.name}")
+        if self.username is not None:
+            self.logger.info(f"attempting to find identity file for {self.username}")
+            self.printer.send_now("M20 L")
