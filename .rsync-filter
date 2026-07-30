@@ -1,0 +1,5 @@
+- .env
+- log
+- .venv
+- log_old
+- .dir-locals.el

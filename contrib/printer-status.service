@@ -1,0 +1,13 @@
+[Unit]
+Description=Bridge printer status to MQTT
+StartLimitInterval=200
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/home/prusa3/PrinterStatus/.venv/bin/printer-status /home/prusa3/PrinterStatus/config.json
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
