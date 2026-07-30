@@ -21,9 +21,11 @@
         {
             "name": "Prusheen",
             "shortname": "white",
-            "type": "disabled",
+            "type": "mk4",
 
             "serial": "/dev/serial/by-id/usb-Prusa_Research__prusa3d.com__Original_Prusa_MK4_10589-3742441631710919-if00",
+            "api_base": "http://prusa-mk4.hacklab",
+            "api_key_file": "/home/prusa3/mk4_api_key",
             "baud": 115200
         }
     ]

@@ -42,13 +42,13 @@ class MQTTStatusRecorder(StatusRecorder):
     client: mqtt.Client
 
     def __init__(self, client: mqtt.Client, name: str, short_name: str):
-        self.name = short_name
+        self.name = name
         self.short_name = short_name
         self.debug = DebugStatusRecorder(short_name)
         self.client = client
 
     def print_finished(self):
-        self.client.publish(f"sound/g1/speak", f"Print finished on {self.name}")
+        self.client.publish(f"sound/g1/announce", f"Print finished on {self.name}")
         self.not_printing()
 
     def print_finished_found_discord_username(self, username: str, file: str):
