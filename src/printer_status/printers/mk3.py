@@ -1,9 +1,10 @@
 from printrun.printcore import printcore
-from printers.status_packet import Status
+
+from printer_status.status_recorder import DebugStatusRecorder, StatusRecorder
+from .printer import Printer as BasePrinter
 import re
 from logging import Logger, getLogger
 from paho.mqtt.client import Client
-import json
 from enum import StrEnum, Enum
 
 status_regex = re.compile(r"done: ([0-9]*).+?mins: ([0-9]*)")
@@ -15,17 +16,17 @@ class State(StrEnum):
     Printing = "printing"
     Complete = "complete"
 
+
 class ParseMode(Enum):
     Normal = 1
     File = 2
 
-class Printer:
+
+class Printer(BasePrinter):
     printer: printcore
 
     # Config
     name: str
-    model: str
-    colour: str
     serial: str
     baud: int
 
@@ -44,52 +45,37 @@ class Printer:
     dir_depth: int
 
     logger: Logger
-    client: Client
 
-    def __init__(self, config: dict[str, str | int], client: Client):
+    recorder: StatusRecorder
+
+    def __init__(self, config: dict[str, str | int], recorder: StatusRecorder):
         self.name = str(config["name"])
         self.shortname = str(config["shortname"])
-        self.model = str(config["model"])
-        self.colour = str(config["colour"])
         self.serial = str(config["serial"])
         self.baud = int(config["baud"])
 
         self.logger = getLogger(self.name)
-        self.client = client
+        self.recorder = recorder
         self.mode = ParseMode.Normal
 
         self.connected = False
         self.state = State.Complete
         self.time_remaining_mins = 0
         self.percent_done = 0
-        self.file = "None"
-        self.username = "None"
+        self.file = "unknown"
+        self.username = None
         self.in_username_dir = False
         self.dir_depth = 0
 
-        self.send_status_to_mqtt()
-
-    def send_status_to_mqtt(self):
-        # Show as idle when not connected
-        if not self.connected:
-            self.state = State.Complete
-
-        self.publish(f"printers/{self.shortname}/state", str(self.state), retain=True)
-        self.publish(
-            f"printers/{self.shortname}/percent_done",
-            str(self.percent_done),
-            retain=True,
-        )
-        self.publish(
-            f"printers/{self.shortname}/time_remaining_mins",
-            str(self.time_remaining_mins),
-            retain=True,
-        )
-        self.publish(
-            f"printers/{self.shortname}/file",
-            str(self.file),
-            retain=True,
-        )
+    def main_loop(self, recorder: StatusRecorder):
+        self.recorder = recorder
+        recorder.not_printing()
+        while True:
+            self.connect()
+            if self.printer.read_thread:
+                self.printer.read_thread.join()
+            if self.printer.send_thread:
+                self.printer.send_thread.join()
 
     def connect(self) -> bool:
         self.logger.info(f"Connecting to printer {self.name}")
@@ -115,7 +101,6 @@ class Printer:
 
         return self.connected
 
-    # Recieve callback
     def handle_msg(self, line: str):
         line = line.rstrip("\n")
         self.logger.debug(f"M: {self.mode} RECV: {line}")
@@ -127,18 +112,26 @@ class Printer:
                 stats: regex.Match[str] = status_regex.search(line)  # type: ignore
                 self.logger.debug(f"{stats.group(1)}, {stats.group(2)}")
 
-                self.state = State.Printing
                 self.percent_done = int(stats.group(1))
                 self.time_remaining_mins = int(stats.group(2))
-                self.send_status_to_mqtt()
+
+                if self.percent_done == 0 and self.time_remaining_mins == 0:
+                    self.recorder.preprint(self.file)
+                else:
+                    self.state = State.Printing
+                    self.recorder.printing(
+                        self.file, self.percent_done, self.time_remaining_mins
+                    )
 
             # File opened: /JACOB/0.4/Cali-Dragon-Tiny_PLA.gcode Size: 467996
             elif line[0:12] == "File opened:":
                 file_name = line[13:-1].split(" ")[0]
                 self.state = State.Printing
                 self.file = file_name
-                self.username = file_name.split('/')[1] if len(file_name.split('/')) > 2 else None
-                self.send_status_to_mqtt()
+                self.username = (
+                    file_name.split("/")[1] if len(file_name.split("/")) > 2 else None
+                )
+                self.recorder.preprint(self.file)
 
             # File Finished: 'Done printing file'
             elif line == "Done printing file":
@@ -147,19 +140,21 @@ class Printer:
                 self.time_remaining_mins = 0
                 # Don't clear file and CWD yet so we can try and ping the user on discord
                 self.on_complete()
-                self.send_status_to_mqtt()
 
             # Print manually paused: '//action:paused'
             # Print paused automatically: 'echo:busy: paused for user'
-            elif line == "//action:paused" or line == "echo:busy: paused for user" and self.state != State.Paused:
+            elif (
+                line == "//action:paused"
+                or line == "echo:busy: paused for user"
+                and self.state != State.Paused
+            ):
                 self.state = State.Paused
-                self.send_status_to_mqtt()
+                self.recorder.paused()
                 self.on_complete()
 
             # Print cancelled
             elif line == "//action:cancel":
                 self.state = State.Cancelled
-                self.send_status_to_mqtt()
                 self.on_complete()
 
             elif line.startswith("Begin file list"):
@@ -175,7 +170,7 @@ class Printer:
                 self.mode = ParseMode.Normal
                 self.in_username_dir = False
                 self.dir_depth = 0
-            elif line.startswith("DIR_ENTER"): # DIR_ENTER: /JACOB/ "jacob"
+            elif line.startswith("DIR_ENTER"):  # DIR_ENTER: /JACOB/ "jacob"
                 self.dir_depth += 1
                 if self.username is not None and self.username.lower() in line.lower():
                     self.logger.debug("in username dir")
@@ -188,26 +183,19 @@ class Printer:
                     self.dir_depth = 0
             elif self.in_username_dir and "config.discord..." in line:
                 self.logger.debug(f"encountered identity file: {line}")
-                _SD_path, _size, long_name = line.split(" ")
+                _, _, long_name = line.split(" ")
                 long_name = long_name.removeprefix('"').removesuffix('"')
                 if long_name.startswith("config.discord..."):
                     self.logger.debug(f"found discord filename: {long_name}")
-                    username = long_name.removeprefix("config.discord...").removesuffix(".gcode")
-
-                    self.publish("irc/send", json.dumps({
-                        "to": "#edinhacklab-things",
-                        "message": f"@{username} print '{self.file}' complete on {self.name}"
-                    }))
-
-    def publish(self, topic: str, payload: str, retain=False):
-        if not self.client.is_connected():
-            self.client.connect("mqtt.hacklab")
-
-        self.client.publish(topic, payload, retain=retain)
-
+                    username = long_name.removeprefix("config.discord...").removesuffix(
+                        ".gcode"
+                    )
+                    self.recorder.print_finished_found_discord_username(
+                        username, self.file
+                    )
 
     def on_complete(self):
-        self.publish(f"sound/g1/speak", f"Print finished on {self.name}")
+        self.recorder.print_finished()
         if self.username is not None:
             self.logger.info(f"attempting to find identity file for {self.username}")
             self.printer.send_now("M20 L")

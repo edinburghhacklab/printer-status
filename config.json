@@ -4,7 +4,7 @@
             "name": "Pink Prusa Club",
             "shortname": "pink",
             "model": "Prusa MK3S",
-            "colour": "#f5abb9",
+            "type": "mk3",
 
             "serial": "/dev/serial/by-id/usb-Prusa_Research__prusa3d.com__Original_Prusa_i3_MK3_CZPX3422X004XK80199-if00",
             "baud": 115200
@@ -13,7 +13,7 @@
             "name": "Blusa",
             "shortname": "blue",
             "model": "Prusa MK3S + E3D Revo",
-            "colour": "#5BCEFA",
+            "type": "mk3",
 
             "serial": "/dev/serial/by-id/usb-Prusa_Research__prusa3d.com__Original_Prusa_i3_MK3_CZPX3423X004XK25614-if00",
             "baud": 115200
@@ -21,8 +21,7 @@
         {
             "name": "Prusheen",
             "shortname": "white",
-            "model": "Prusa MK4",
-            "colour": "#ffffff",
+            "type": "disabled",
 
             "serial": "/dev/serial/by-id/usb-Prusa_Research__prusa3d.com__Original_Prusa_MK4_10589-3742441631710919-if00",
             "baud": 115200
