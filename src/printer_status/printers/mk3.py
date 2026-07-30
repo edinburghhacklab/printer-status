@@ -1,10 +1,6 @@
-from printrun.printcore import printcore
-
-from printer_status.status_recorder import DebugStatusRecorder, StatusRecorder
-from .printer import Printer as BasePrinter
+from printer_status.printers.printcore import PrintCorePrinter
+from printer_status.status_recorder import StatusRecorder
 import re
-from logging import Logger, getLogger
-from paho.mqtt.client import Client
 from enum import StrEnum, Enum
 
 status_regex = re.compile(r"done: ([0-9]*).+?mins: ([0-9]*)")
@@ -12,9 +8,8 @@ status_regex = re.compile(r"done: ([0-9]*).+?mins: ([0-9]*)")
 
 class State(StrEnum):
     Paused = "paused"
-    Cancelled = "cancelled"
     Printing = "printing"
-    Complete = "complete"
+    Idle = "complete"
 
 
 class ParseMode(Enum):
@@ -22,16 +17,8 @@ class ParseMode(Enum):
     File = 2
 
 
-class Printer(BasePrinter):
-    printer: printcore
-
-    # Config
-    name: str
-    serial: str
-    baud: int
-
+class Printer(PrintCorePrinter):
     # Status
-    connected: bool
     state: State
     file: str
     username: str | None
@@ -40,66 +27,24 @@ class Printer(BasePrinter):
 
     # Internal
     mode: ParseMode
-
     in_username_dir: bool
     dir_depth: int
-
-    logger: Logger
 
     recorder: StatusRecorder
 
     def __init__(self, config: dict[str, str | int], recorder: StatusRecorder):
-        self.name = str(config["name"])
-        self.shortname = str(config["shortname"])
-        self.serial = str(config["serial"])
-        self.baud = int(config["baud"])
+        super(Printer, self).__init__(config)
 
-        self.logger = getLogger(self.name)
         self.recorder = recorder
-        self.mode = ParseMode.Normal
 
-        self.connected = False
-        self.state = State.Complete
+        self.mode = ParseMode.Normal
+        self.state = State.Idle
         self.time_remaining_mins = 0
         self.percent_done = 0
         self.file = "unknown"
         self.username = None
         self.in_username_dir = False
         self.dir_depth = 0
-
-    def main_loop(self, recorder: StatusRecorder):
-        self.recorder = recorder
-        recorder.not_printing()
-        while True:
-            self.connect()
-            if self.printer.read_thread:
-                self.printer.read_thread.join()
-            if self.printer.send_thread:
-                self.printer.send_thread.join()
-
-    def connect(self) -> bool:
-        self.logger.info(f"Connecting to printer {self.name}")
-        # Connect
-        try:
-            # Connect to printer
-            self.printer = printcore(port=self.serial, baud=self.baud)
-            self.connected = True
-
-        except Exception as err:
-            self.logger.error(f"Could not connect to printer {self.name}: {err}")
-            self.connected = False
-
-        # Setup
-        try:
-            # Setup recieve callback
-            self.printer.recvcb = self.handle_msg  # type: ignore
-            self.printer.event_handler
-
-        except Exception as err:
-            self.logger.error(f"Could not setup printer {self.name}: {err}")
-            self.connected = False
-
-        return self.connected
 
     def handle_msg(self, line: str):
         line = line.rstrip("\n")
@@ -135,7 +80,7 @@ class Printer(BasePrinter):
 
             # File Finished: 'Done printing file'
             elif line == "Done printing file":
-                self.state = State.Complete
+                self.state = State.Idle
                 self.percent_done = 100
                 self.time_remaining_mins = 0
                 # Don't clear file and CWD yet so we can try and ping the user on discord
@@ -154,7 +99,7 @@ class Printer(BasePrinter):
 
             # Print cancelled
             elif line == "//action:cancel":
-                self.state = State.Cancelled
+                self.state = State.Idle
                 self.on_complete()
 
             elif line.startswith("Begin file list"):
