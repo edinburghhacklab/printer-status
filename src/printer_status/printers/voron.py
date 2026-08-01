@@ -5,6 +5,7 @@ import paho.mqtt.client as mqtt
 import json
 from logging import getLogger
 from urllib import request
+from urllib.parse import quote as url_quote
 import math
 
 
@@ -50,6 +51,7 @@ class Printer(BasePrinter):
         self.client = client
         self.topic_base = str(config["mqtt_topic_base"])
         self.status_topic = f"{self.topic_base}/klipper/status"
+        self.led_topic = f"{self.topic_base}/leds"
         self.logger = getLogger(str(config["name"]))
 
         self.state = State.Standby
@@ -63,12 +65,14 @@ class Printer(BasePrinter):
         client.on_connect = self.on_connect
         if client.is_connected():
             client.subscribe(self.status_topic)
+            client.subscribe(self.led_topic)
 
         self.api_base = config["api_base"]
         with open(config["api_key_file"]) as f:
             self.api_key = f.read().strip()
 
         client.message_callback_add(self.status_topic, self.on_message)
+        client.message_callback_add(self.led_topic, self.on_led_message)
 
     def on_connect(self, client: mqtt.Client, _userdata, _flags, _rc):
         if self.prev_on_connect is not None:
@@ -76,6 +80,7 @@ class Printer(BasePrinter):
 
         if client.is_connected():
             client.subscribe(self.status_topic)
+            client.subscribe(self.led_topic)
 
     def main_loop(self, recorder: StatusRecorder):
         recorder.not_printing()
@@ -181,3 +186,11 @@ class Printer(BasePrinter):
         )
         resp = request.urlopen(req)
         return json.load(resp)
+
+    def on_led_message(self, client, _userdata, msg: mqtt.MQTTMessage):
+        msg = msg.payload.decode("utf-8")
+        if msg == "1":
+            script = "SET_FAN_SPEED FAN=caselight SPEED=0.5"
+        else:
+            script = "SET_FAN_SPEED FAN=caselight SPEED=0"
+        self.api_request(f"printer/gcode/script?script={url_quote(script)}")
