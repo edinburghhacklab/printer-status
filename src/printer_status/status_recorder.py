@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from paho.mqtt import client as mqtt
 import json
+import random
 
 
 class StatusRecorder(ABC):
@@ -57,7 +58,30 @@ class MQTTStatusRecorder(StatusRecorder):
         }
         name = SUBSTITUTIONS.get(self.name.lower(), self.name.lower())
 
-        self.client.publish(f"sound/g1/announce", f"Print finished on {name}")
+        message = random.choices(
+            [
+                f"Print finished on {name}",
+                f"Spaghetti detected on {name}",
+                f"Bo gos binted on {name}",
+                f"{name} has completed the work, my liege",
+                f"Wavelength pattern blue on {name}",
+                f"A process has occured on {name}",
+                f"Replicator reports job complete captain",
+                f"Mr president, a second print has hit the {name}",
+            ],
+            weights=[
+                6.5,
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                0.5,
+            ],
+            k=1,
+        )[0]
+        self.client.publish(f"sound/g1/announce", message)
         self.not_printing()
 
     def print_finished_found_discord_username(self, username: str, file: str):
