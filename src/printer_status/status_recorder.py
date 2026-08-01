@@ -67,10 +67,12 @@ class MQTTStatusRecorder(StatusRecorder):
                 f"Wavelength pattern blue on {name}",
                 f"A process has occured on {name}",
                 f"Replicator reports job complete captain",
+                f"Good news everyone, print finished on {name}",
                 f"Mr president, a second print has hit the {name}",
             ],
             weights=[
-                6.5,
+                7.5,
+                1,
                 1,
                 1,
                 1,
