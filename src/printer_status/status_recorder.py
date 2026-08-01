@@ -48,7 +48,16 @@ class MQTTStatusRecorder(StatusRecorder):
         self.client = client
 
     def print_finished(self):
-        self.client.publish(f"sound/g1/announce", f"Print finished on {self.name}")
+        # Make the TTS happy
+        SUBSTITUTIONS = {
+            "voron": "vore on",
+            "prusheen": "proosheen",
+            "blusa": "bloosha",
+            "pink prusa club": "pink proosha club",
+        }
+        name = SUBSTITUTIONS.get(self.name.lower(), self.name.lower())
+
+        self.client.publish(f"sound/g1/announce", f"Print finished on {name}")
         self.not_printing()
 
     def print_finished_found_discord_username(self, username: str, file: str):

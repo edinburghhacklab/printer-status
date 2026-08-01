@@ -8,7 +8,7 @@ import logging
 import threading
 from datetime import datetime
 
-from .printers import mk3, mk4
+from .printers import mk3, mk4, voron
 from .status_recorder import MQTTStatusRecorder
 
 logger = logging.getLogger()
@@ -79,6 +79,8 @@ def main():
                 printer = mk3.Printer(printer_config, recorder)
             case "mk4":
                 printer = mk4.Printer(printer_config, recorder)
+            case "voron":
+                printer = voron.Printer(printer_config, client)
             case "disabled":
                 continue
             case _:

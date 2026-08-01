@@ -3,7 +3,6 @@
         {
             "name": "Pink Prusa Club",
             "shortname": "pink",
-            "model": "Prusa MK3S",
             "type": "mk3",
 
             "serial": "/dev/serial/by-id/usb-Prusa_Research__prusa3d.com__Original_Prusa_i3_MK3_CZPX3422X004XK80199-if00",
@@ -12,7 +11,6 @@
         {
             "name": "Blusa",
             "shortname": "blue",
-            "model": "Prusa MK3S + E3D Revo",
             "type": "mk3",
 
             "serial": "/dev/serial/by-id/usb-Prusa_Research__prusa3d.com__Original_Prusa_i3_MK3_CZPX3423X004XK25614-if00",
@@ -27,6 +25,15 @@
             "api_base": "http://prusa-mk4.hacklab",
             "api_key_file": "/home/prusa3/mk4_api_key",
             "baud": 115200
+        },
+        {
+            "name": "Voron",
+            "shortname": "voron",
+            "type": "voron",
+
+            "mqtt_topic_base": "voron",
+            "api_base": "http://voron24.hacklab",
+            "api_key_file": "/home/prusa3/voron_api_key"
         }
     ]
 }
