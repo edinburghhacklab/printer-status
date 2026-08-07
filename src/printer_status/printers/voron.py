@@ -17,6 +17,7 @@ import math
 #     display_status
 # status_interval: 5
 # publish_split_status: False
+# qos: 1
 
 
 class State(StrEnum):
@@ -117,6 +118,8 @@ class Printer(BasePrinter):
             percent_progress = int(float(progress) * 100.0)
             if percent_progress != self.percent_progress:
                 self.percent_progress = percent_progress
+                if percent_progress != 0:
+                    self.state = State.Printing
                 self.re_record(self.state)
 
     def re_record(self, old_state: State):
